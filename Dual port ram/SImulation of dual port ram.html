@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asynchronous FIFO Simulator</title>
+    <style>
+        :root {
+            --write-bg: #e0f7fa;
+            --write-border: #00838f;
+            --read-bg: #f1f8e9;
+            --read-border: #558b2f;
+            --mem-empty: #eceff1;
+            --mem-filled: #ffb74d;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+        .simulator-container {
+            display: flex;
+            gap: 20px;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            max-width: 1000px;
+            width: 100%;
+        }
+        .domain {
+            flex: 1;
+            padding: 20px;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .write-domain {
+            background-color: var(--write-bg);
+            border: 2px solid var(--write-border);
+        }
+        .read-domain {
+            background-color: var(--read-bg);
+            border: 2px solid var(--read-border);
+        }
+        .memory-domain {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            min-width: 250px;
+        }
+        h3 { margin-top: 0; text-align: center; }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            background: rgba(255,255,255,0.7);
+            padding: 10px;
+            border-radius: 6px;
+        }
+        button {
+            padding: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .write-btn { background-color: var(--write-border); color: white; }
+        .write-btn:hover { background-color: #006064; }
+        .write-btn:disabled { background-color: #b2ebf2; cursor: not-allowed; }
+        
+        .read-btn { background-color: var(--read-border); color: white; }
+        .read-btn:hover { background-color: #33691e; }
+        .read-btn:disabled { background-color: #c5e1a5; cursor: not-allowed; }
+
+        .flag {
+            font-weight: bold;
+            text-align: center;
+            padding: 8px;
+            border-radius: 4px;
+            color: white;
+            background-color: #9e9e9e;
+        }
+        .flag.active-full { background-color: #d32f2f; }
+        .flag.active-empty { background-color: #1976d2; }
+
+        .clock-indicator {
+            height: 20px;
+            border-radius: 10px;
+            background-color: #ddd;
+            position: relative;
+            overflow: hidden;
+        }
+        .clock-pulse {
+            height: 100%;
+            width: 50%;
+            background-color: #757575;
+            position: absolute;
+            transition: left 0.1s linear;
+        }
+
+        /* Circular Buffer Styles */
+        .buffer-container {
+            position: relative;
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            border: 4px dashed #bdbdbd;
+        }
+        .slot {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background-color: var(--mem-empty);
+            border: 2px solid #9e9e9e;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            transform: translate(-50%, -50%);
+            transition: all 0.2s;
+        }
+        .slot.filled {
+            background-color: var(--mem-filled);
+            border-color: #ef6c00;
+        }
+        .pointer {
+            position: absolute;
+            width: 0; 
+            height: 0; 
+            border-top: 10px solid transparent;
+            border-bottom: 10px solid transparent;
+            transform-origin: left center;
+            transition: transform 0.3s ease-in-out;
+            left: 100px;
+            top: 100px;
+        }
+        .w-ptr { border-left: 60px solid var(--write-border); }
+        .r-ptr { border-left: 45px solid var(--read-border); }
+        
+        .code-display {
+            font-family: monospace;
+            background: #eee;
+            padding: 4px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="simulator-container">
+    <div class="domain write-domain">
+        <h3 style="color: var(--write-border)">Write Domain</h3>
+        
+        <div class="control-group">
+            <label>Clock Speed: <span id="w-speed-val">500</span>ms</label>
+            <input type="range" id="w-speed" min="100" max="2000" value="500" dir="rtl">
+            <div class="clock-indicator"><div class="clock-pulse" id="w-clock-ui"></div></div>
+        </div>
+
+        <button class="write-btn" id="btn-write">Write Data</button>
+
+        <div class="control-group">
+            <div>W-Ptr (Binary): <span class="code-display" id="w-ptr-bin">0000</span></div>
+            <div>W-Ptr (Gray): <span class="code-display" id="w-ptr-gray">0000</span></div>
+        </div>
+
+        <div class="control-group">
+            <strong>Synchronizer (Read -> Write)</strong>
+            <div>Sync 1: <span class="code-display" id="sync-r1">0000</span></div>
+            <div>Sync 2: <span class="code-display" id="sync-r2">0000</span></div>
+        </div>
+
+        <div class="flag" id="flag-full">FIFO FULL</div>
+    </div>
+
+    <div class="memory-domain">
+        <h3>Dual-Port RAM</h3>
+        <div class="buffer-container" id="buffer">
+            <div class="pointer w-ptr" id="w-pointer-ui"></div>
+            <div class="pointer r-ptr" id="r-pointer-ui"></div>
+        </div>
+        <p style="text-align: center; font-size: 12px; color: #666; margin-top: 20px;">
+            Outer arrow: Write Pointer<br>Inner arrow: Read Pointer
+        </p>
+    </div>
+
+    <div class="domain read-domain">
+        <h3 style="color: var(--read-border)">Read Domain</h3>
+        
+        <div class="control-group">
+            <label>Clock Speed: <span id="r-speed-val">800</span>ms</label>
+            <input type="range" id="r-speed" min="100" max="2000" value="800" dir="rtl">
+            <div class="clock-indicator"><div class="clock-pulse" id="r-clock-ui"></div></div>
+        </div>
+
+        <button class="read-btn" id="btn-read">Read Data</button>
+
+        <div class="control-group">
+            <div>R-Ptr (Binary): <span class="code-display" id="r-ptr-bin">0000</span></div>
+            <div>R-Ptr (Gray): <span class="code-display" id="r-ptr-gray">0000</span></div>
+        </div>
+
+        <div class="control-group">
+            <strong>Synchronizer (Write -> Read)</strong>
+            <div>Sync 1: <span class="code-display" id="sync-w1">0000</span></div>
+            <div>Sync 2: <span class="code-display" id="sync-w2">0000</span></div>
+        </div>
+
+        <div class="flag active-empty" id="flag-empty">FIFO EMPTY</div>
+    </div>
+</div>
+
+<script>
+    // --- State Variables ---
+    const DEPTH = 8;
+    const BIT_WIDTH = 4; // 4 bits to cover 0-15 (extra bit for wrap-around)
+    
+    let memory = Array(DEPTH).fill(null);
+    let dataCounter = 1;
+
+    // Pointers (0 to 15)
+    let wptr = 0;
+    let rptr = 0;
+
+    // Synchronizers (Gray code)
+    let wptr_gray = 0, wptr_sync1 = 0, wptr_sync2 = 0;
+    let rptr_gray = 0, rptr_sync1 = 0, rptr_sync2 = 0;
+
+    // Flags
+    let isFull = false;
+    let isEmpty = true;
+
+    // Clock state
+    let wClockPulse = false;
+    let rClockPulse = false;
+    let wInterval, rInterval;
+
+    // --- Helper Functions ---
+    function binToGray(bin) {
+        return (bin >> 1) ^ bin;
+    }
+
+    function formatBits(num, width) {
+        return num.toString(2).padStart(width, '0');
+    }
+
+    // --- Core Logic ---
+    function updateFlags() {
+        // Empty: When synchronized write pointer matches current read pointer
+        isEmpty = (wptr_sync2 === rptr_gray);
+        
+        // Full: When synchronized read pointer's top two bits are inverted compared to write pointer, 
+        // and lower bits match. (Using 0xC = 1100 in binary to invert top two bits of a 4-bit number)
+        isFull = (wptr_gray === (rptr_sync2 ^ 0xC));
+
+        // Update UI Flags
+        document.getElementById('flag-empty').className = 'flag ' + (isEmpty ? 'active-empty' : '');
+        document.getElementById('flag-full').className = 'flag ' + (isFull ? 'active-full' : '');
+        
+        // Update Buttons
+        document.getElementById('btn-write').disabled = isFull;
+        document.getElementById('btn-read').disabled = isEmpty;
+    }
+
+    // Write Clock Tick
+    function writeClockTick() {
+        wClockPulse = !wClockPulse;
+        document.getElementById('w-clock-ui').style.left = wClockPulse ? '50%' : '0%';
+
+        if(wClockPulse) {
+            // Sample Read Pointer through Synchronizer (R -> W)
+            rptr_sync2 = rptr_sync1;
+            rptr_sync1 = rptr_gray;
+            updateFlags();
+            updateUI();
+        }
+    }
+
+    // Read Clock Tick
+    function readClockTick() {
+        rClockPulse = !rClockPulse;
+        document.getElementById('r-clock-ui').style.left = rClockPulse ? '50%' : '0%';
+
+        if(rClockPulse) {
+            // Sample Write Pointer through Synchronizer (W -> R)
+            wptr_sync2 = wptr_sync1;
+            wptr_sync1 = wptr_gray;
+            updateFlags();
+            updateUI();
+        }
+    }
+
+    // --- Interactions ---
+    document.getElementById('btn-write').onclick = () => {
+        if (!isFull) {
+            memory[wptr % DEPTH] = "D" + dataCounter++;
+            wptr = (wptr + 1) % (DEPTH * 2);
+            wptr_gray = binToGray(wptr);
+            updateUI();
+        }
+    };
+
+    document.getElementById('btn-read').onclick = () => {
+        if (!isEmpty) {
+            memory[rptr % DEPTH] = null;
+            rptr = (rptr + 1) % (DEPTH * 2);
+            rptr_gray = binToGray(rptr);
+            updateUI();
+        }
+    };
+
+    // --- UI Update ---
+    function initBufferUI() {
+        const container = document.getElementById('buffer');
+        for(let i = 0; i < DEPTH; i++) {
+            let slot = document.createElement('div');
+            slot.className = 'slot';
+            slot.id = 'slot-' + i;
+            
+            // Calculate position on circle
+            let angle = (i / DEPTH) * 2 * Math.PI - (Math.PI / 2);
+            let radius = 100;
+            let x = radius + radius * Math.cos(angle);
+            let y = radius + radius * Math.sin(angle);
+            
+            slot.style.left = x + 'px';
+            slot.style.top = y + 'px';
+            container.appendChild(slot);
+        }
+    }
+
+    function updateUI() {
+        // Update Numbers
+        document.getElementById('w-ptr-bin').innerText = formatBits(wptr, BIT_WIDTH);
+        document.getElementById('w-ptr-gray').innerText = formatBits(wptr_gray, BIT_WIDTH);
+        document.getElementById('sync-r1').innerText = formatBits(rptr_sync1, BIT_WIDTH);
+        document.getElementById('sync-r2').innerText = formatBits(rptr_sync2, BIT_WIDTH);
+
+        document.getElementById('r-ptr-bin').innerText = formatBits(rptr, BIT_WIDTH);
+        document.getElementById('r-ptr-gray').innerText = formatBits(rptr_gray, BIT_WIDTH);
+        document.getElementById('sync-w1').innerText = formatBits(wptr_sync1, BIT_WIDTH);
+        document.getElementById('sync-w2').innerText = formatBits(wptr_sync2, BIT_WIDTH);
+
+        // Update Slots
+        for(let i = 0; i < DEPTH; i++) {
+            let slot = document.getElementById('slot-' + i);
+            if(memory[i]) {
+                slot.className = 'slot filled';
+                slot.innerText = memory[i];
+            } else {
+                slot.className = 'slot';
+                slot.innerText = '';
+            }
+        }
+
+        // Update Pointer Rotations
+        let wAngle = ((wptr % DEPTH) / DEPTH) * 360 - 90;
+        let rAngle = ((rptr % DEPTH) / DEPTH) * 360 - 90;
+        document.getElementById('w-pointer-ui').style.transform = `rotate(${wAngle}deg)`;
+        document.getElementById('r-pointer-ui').style.transform = `rotate(${rAngle}deg)`;
+    }
+
+    // --- Setup Clocks ---
+    function setupClocks() {
+        clearInterval(wInterval);
+        clearInterval(rInterval);
+        
+        let wSpeed = parseInt(document.getElementById('w-speed').value);
+        let rSpeed = parseInt(document.getElementById('r-speed').value);
+        
+        wInterval = setInterval(writeClockTick, wSpeed / 2);
+        rInterval = setInterval(readClockTick, rSpeed / 2);
+    }
+
+    document.getElementById('w-speed').oninput = (e) => {
+        document.getElementById('w-speed-val').innerText = e.target.value;
+        setupClocks();
+    };
+    
+    document.getElementById('r-speed').oninput = (e) => {
+        document.getElementById('r-speed-val').innerText = e.target.value;
+        setupClocks();
+    };
+
+    // Initialize
+    initBufferUI();
+    wptr_gray = binToGray(wptr);
+    rptr_gray = binToGray(rptr);
+    updateFlags();
+    updateUI();
+    setupClocks();
+
+</script>
+</body>
+</html>
